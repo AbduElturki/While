@@ -135,19 +135,19 @@ aexp = buildExpressionParser ops term where
 
 bexp :: Parser Bexp
 bexp = buildExpressionParser ops term where
-  ops = [ [Prefix (Neg  <$ reservedOp "!")           ]
-        , [Infix  (And  <$ reservedOp "&") AssocNone ]
+  ops = [ [Prefix (Neg  <$ reservedOp "!")          ]
+        , [Infix  (And  <$ reservedOp "&") AssocNone]
         ]
   term =  parens bexp
-      <|> (reserved "true"  >> return (TRUE ))
-      <|> (reserved "false" >> return (FALSE))
+      <|> (TRUE  <$ reserved "true" )
+      <|> (FALSE <$ reserved "false")
       <|> rexp
 
 -- Relation expression
 
 rexp =
   do a1 <- aexp
-     op  <- (Le <$ reservedOp "<")
+     op <-  (Le <$ reservedOp "<")
         <|> (Eq <$ reservedOp "=")
      a2 <- aexp
      return $ op a1 a2
@@ -157,14 +157,14 @@ rexp =
 parseString :: String -> Stm
 parseString str =
   case parse whileParser "" str of
-    Left e  -> error $ show e
+    Left  e -> error $ show e
     Right r -> r
 
 -- Parses Files
 
 parseFile :: String -> IO Stm
-parseFile file =
-  do program  <- readFile file
-     case parse whileParser "" program of
-       Left e  -> print e >> fail "parse error"
-       Right r -> return r
+parseFile file = do
+  program  <- readFile file
+  case parse whileParser "" program of
+    Left  e -> print  e >> fail "parse error"
+    Right r -> return r
