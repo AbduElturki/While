@@ -54,6 +54,11 @@ languageDef =
                                       , "skip"
                                       , "true"
                                       , "false"
+                                      , "proc"
+                                      , "is"
+                                      , "begin"
+                                      , "end"
+                                      , "call"
                                       ]
             , Token.reservedOpNames = [ "+", "-", "*", ":="
                                       , "<", "=", "&", "!"
@@ -90,11 +95,13 @@ statement' =  ifStm         --If statement
           <|> whileStm      --While loop
           <|> skipStm       --Skip
           <|> assignStm     --assignment
+          <|> blockStm      --Block statement
+          <|> callprocStm   --Proc statement
 
 ifStm :: Parser Stm
 ifStm = do
   reserved "if"
-  cond  <- bexp
+  cond <- bexp
   reserved "then"
   stm1 <- statement
   reserved "else"
@@ -106,7 +113,7 @@ whileStm = do
   reserved "while"
   cond <- bexp
   reserved "do"
-  stm <- statement
+  stm  <- statement
   return $ While cond stm
 
 assignStm :: Parser Stm
@@ -118,6 +125,21 @@ assignStm = do
 
 skipStm :: Parser Stm
 skipStm = reserved "skip" >> return Skip
+
+blockStm :: Parser Stm
+blockStm = do
+  reserved "begin"
+  dv  <- many decvclause
+  dp  <- many decpclause
+  stm <- statement
+  reserved "end"
+  return $ Block dv dp stm
+
+callprocStm :: Parser Stm
+callprocStm = do
+  reserved "call"
+  procp <- identifier
+  return $ Call procp
 
 -- Aexp Parser
 
@@ -145,12 +167,21 @@ bexp = buildExpressionParser ops term where
 
 -- Relation expression
 
-rexp =
-  do a1 <- aexp
-     op <-  (Le <$ reservedOp "<")
-        <|> (Eq <$ reservedOp "=")
-     a2 <- aexp
-     return $ op a1 a2
+rexp = do
+  a1 <- aexp
+  op <-  (Le <$ reservedOp "<")
+     <|> (Eq <$ reservedOp "=")
+  a2 <- aexp
+  return $ op a1 a2
+
+  -- DecV abd DecP clauses
+
+  tok :: String -> Parser String
+  tok t = try (string t <* whitespace)
+
+  decvclause = tok "var" *> ((,) <$> identifier) <* tok ":=" <*> aexp <* tok ";"
+
+  decpclause = tok "proc" *> ((,) <$> identifier) <* tok "is" <*> statement' <* tok ";"
 
 -- Parses String inputs
 
