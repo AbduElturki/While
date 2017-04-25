@@ -1,0 +1,22 @@
+replace :: Eq a => (a -> b) -> a -> b -> (a -> b)
+replace f x' fx' x = if x == x' then fx' else f x
+
+
+type Z = Int
+type B = Bool
+type State = Var -> Z
+
+-- Denotational
+
+evalA :: State -> Aexp -> Z
+evalA st (Num n) = n
+evalA st (Var v) = st v
+
+evalB :: State -> Bexp -> B
+
+
+-- Operational
+
+s_dynamic :: State -> Stm -> State
+s_dynamic st Skip = st
+s_dynamic st (Ass var aexp) = replace st var (evalA aexp)
