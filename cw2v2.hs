@@ -1,21 +1,22 @@
 module ParsePrec where
-
+import Prelude hiding (Num)
+import qualified Prelude (Num)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Applicative
-import Text.Megaparsec
+import Text.Megaparsec hiding (State, parse)
 import Text.Megaparsec.Expr
 import Text.Megaparsec.String
 import qualified Text.Megaparsec.Lexer as Lexer
 
-type Int = Integer
+type Num = Integer
 type Var = String
 type Pname = String
 type DecV = [(Var,Aexp)]
 type DecP = [(Pname,Stm)]
 type Loc = Integer
 
-data Aexp = N ParsePrec.Int
+data Aexp = N Num
           | V Var
           | Mult Aexp Aexp
           | Add Aexp Aexp
@@ -197,27 +198,30 @@ decvclause = tok "var" *> ((,) <$> identifier) <* tok ":=" <*> aexp <* tok ";"
 
 decpclause = tok "proc" *> ((,) <$> identifier) <* tok "is" <*> statement' <* tok ";"
 
-parseString :: String -> IO()
-parseString str = parseTest whileParser str
+parse :: String -> Stm
+parse str = case parseMaybe (between whitespace eof statement) str of
+                  Just a -> a
+                  Nothing -> error "you suck"
 
 --------------------------------------------------------------------------------
 
-type Z = ParsePrec.Int
+type Z = Num
 type T = Bool
-type PrecState = Var -> Z
+type State = Var -> Z
+type S_envp = Pname -> Stm
 
-data Config = Inter Stm PrecState
-            | Final PrecState
+data Config = Inter Stm State
+            | Final State
 
 
-evalA :: PrecState -> Aexp -> Z
+evalA :: State -> Aexp -> Z
 evalA st (N n)    = n
 evalA st (V v)    = st v
 evalA st (Add a b)  = (evalA st a) + (evalA st b)
 evalA st (Sub a b)  = (evalA st a) - (evalA st b)
 evalA st (Mult a b) = (evalA st a) * (evalA st b)
 
-evalB :: PrecState -> Bexp -> T
+evalB :: State -> Bexp -> T
 evalB st TRUE      = True
 evalB st FALSE     = False
 evalB st (Neg a)   = not (evalB st a)
@@ -225,25 +229,26 @@ evalB st (Eq a b)  = (evalA st a) == (evalA st b)
 evalB st (Le a b)  = (evalA st a) <= (evalA st b)
 evalB st (And a b) = (evalB st a) && (evalB st b)
 
-update :: PrecState -> Z -> Var -> PrecState
+update :: State -> Z -> Var -> State
 update s v x y = if x == y then v else s y
 
 cond :: (a->T, a->a, a->a) -> (a->a)
 cond (p, g1, g2) s | p s = g1 s
                    | otherwise = g2 s
 
-fix :: ((PrecState->PrecState)->(PrecState->PrecState))->(PrecState->PrecState)
+fix :: ((State->State)->(State->State))->(State->State)
 fix ff = ff (fix ff)
 
-s_ds :: Stm -> PrecState -> PrecState
+{-
+s_ds :: Stm -> State -> State
 s_ds (Ass x a) s = update s (evalA s a) x
 s_ds (Skip) s = s
 s_ds (Comp ss1 ss2) s = ((s_ds ss2).(s_ds ss1)) s
 s_ds (If b ss1 ss2) s = (cond (evalB s b, s_ds ss1, s_ds ss2)) s
 s_ds (While b ss) s = (fix ff) s where
-  ff :: (PrecState->PrecState) -> (PrecState->PrecState)
+  ff :: (State->State) -> (State->State)
   ff g = cond (evalB b, g.s_ds ss, id)
-
+-}
 
 fv_aexp :: Aexp -> [Var]
 fv_aexp (N n) = []
@@ -264,7 +269,7 @@ subst_aexp (Add a1 a2) v a = (Add (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Mult a1 a2) v a = (Mult (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Sub a1 a2) v a = (Sub (subst_aexp a1 v a) (subst_aexp a2 v a))
 
-
+{-
 ns_stm :: Config -> Config
 ns_stm (Inter (Ass x a) s) = Final (update s (evalA a s) x)
 ns_stm (Inter (Skip) s) = Final s
@@ -283,12 +288,52 @@ ns_stm (Inter (While b ss) s) | evalB b s = Final s''
                                 Final s'' = ns_stm (Inter (While b ss) s')
 
 
-s_ns :: Stm -> PrecState -> PrecState
+s_ns :: Stm -> State -> State
 s_ns ss s = s' where
   Final s' = ns_stm (Inter ss s)
+-}
 
-s_dynamic :: PrecState -> Stm -> PrecState
-s_dynamic st Skip = st
-s_dynamic st (Ass var aexp) = update st var (evalA st aexp)
-s_dynamic st (If cond stm1 stm2) = if (evalB st cond) then s_dynamic st stm1 else s_dynamic st stm2
-s_dynamic st (While cond stm) = if (evalB st cond) then s_dynamic st stm else st
+decvupdate :: State
+decvupdate = undefined
+
+
+s_dynamic :: Stm -> State -> State
+s_dynamic ss s = s' where
+  Final s' = ds_stm (const undefined) (Inter ss s)
+
+ds_stm :: S_envp -> Config  -> Config
+ds_stm envp (Inter (Ass x a) s) = Final (update s (evalA s a) x)
+ds_stm envp (Inter Skip s) = Final s
+ds_stm envp (Inter (Comp stm1 stm2) s)= Final s''
+    where
+      Final s'  = ds_stm envp (Inter stm1 s)
+      Final s'' = ds_stm envp (Inter stm2 s')
+ds_stm envp (Inter (If bexp stm1 stm2) s)
+  | evalB s bexp = Final s'
+  where
+    Final s' = ds_stm envp (Inter stm1 s)
+ds_stm envp (Inter (If bexp stm1 stm2) s)
+  | not(evalB s bexp) = Final s'
+  where
+    Final s' = ds_stm envp (Inter stm2 s)
+ds_stm envp (Inter (While bexp stm) s)
+  | evalB s bexp = Final s''
+  where
+    Final s'  = ds_stm envp (Inter stm s)
+    Final s'' = ds_stm envp (Inter (While bexp stm) s')
+ds_stm envp (Inter (While bexp stm) s)
+  | not(evalB s bexp ) = Final s
+ds_stm envp (Inter (Block decv decp stm) s) = ds_stm (fold_procedures envp decp) (Inter stm s)
+ds_stm envp (Inter (Call pname) s) = ds_stm envp (Final s)
+
+fold_procedures :: S_envp -> DecP -> S_envp
+fold_procedures envp decp = envp where
+  envp = foldr upd_p envp decp
+
+upd_p :: (Pname, Stm) -> S_envp -> S_envp
+upd_p (pname, stmt) envp y
+  | pname == y = stmt
+  | otherwise  = envp y
+
+init_s :: State
+init_s a = 0
