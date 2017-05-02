@@ -111,7 +111,7 @@ statement' :: Parser Stm
 statement' =  ifStm         --If statement
           <|> whileStm      --While loop
           <|> skipStm
-          <|> blockStm      --Skip
+          <|> blockStm
           <|> assignStm     --assignment
           <|> callprocStm
 
@@ -184,7 +184,7 @@ bexp = makeExprParser term ops where
 
 rexp = do
   a1 <- aexp
-  op <-  (Le <$ symbol "<")
+  op <-  (Le <$ symbol "<=")
      <|> (Eq <$ symbol "=")
   a2 <- aexp
   return $ op a1 a2
@@ -199,16 +199,23 @@ decvclause = tok "var" *> ((,) <$> identifier) <* tok ":=" <*> aexp <* tok ";"
 decpclause = tok "proc" *> ((,) <$> identifier) <* tok "is" <*> statement' <* tok ";"
 
 parse :: String -> Stm
-parse str = case parseMaybe (between whitespace eof statement) str of
-                  Just a -> a
-                  Nothing -> error "you suck"
+parse str = case parseMaybe whileParser str of
+  Just a -> a
+  Nothing -> error "you suck fam. git gud"
 
 --------------------------------------------------------------------------------
 
 type Z = Num
 type T = Bool
 type State = Var -> Z
-type S_envp = Pname -> Stm
+type D_envp = Pname -> Stm
+--type M_envp = Pname -> Stm -> M_envp
+--type S_envp = Pname -> Stm -> Envv -> Envp
+--type Envv = Var -> Lock
+--type Loc = Z
+
+--new:: Loc -> Loc
+--new x = x + 1
 
 data Config = Inter Stm State
             | Final State
@@ -239,17 +246,6 @@ cond (p, g1, g2) s | p s = g1 s
 fix :: ((State->State)->(State->State))->(State->State)
 fix ff = ff (fix ff)
 
-{-
-s_ds :: Stm -> State -> State
-s_ds (Ass x a) s = update s (evalA s a) x
-s_ds (Skip) s = s
-s_ds (Comp ss1 ss2) s = ((s_ds ss2).(s_ds ss1)) s
-s_ds (If b ss1 ss2) s = (cond (evalB s b, s_ds ss1, s_ds ss2)) s
-s_ds (While b ss) s = (fix ff) s where
-  ff :: (State->State) -> (State->State)
-  ff g = cond (evalB b, g.s_ds ss, id)
--}
-
 fv_aexp :: Aexp -> [Var]
 fv_aexp (N n) = []
 fv_aexp (V x) = [x]
@@ -269,71 +265,96 @@ subst_aexp (Add a1 a2) v a = (Add (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Mult a1 a2) v a = (Mult (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Sub a1 a2) v a = (Sub (subst_aexp a1 v a) (subst_aexp a2 v a))
 
-{-
-ns_stm :: Config -> Config
-ns_stm (Inter (Ass x a) s) = Final (update s (evalA a s) x)
-ns_stm (Inter (Skip) s) = Final s
-ns_stm (Inter (Comp ss1 ss2) s) = Final s'' where
-  Final s'  = ns_stm (Inter ss1 s)
-  Final s'' = ns_stm (Inter ss2 s')
-ns_stm (Inter (If b ss1 ss2) s) | evalB b s = Final s'
-                                | otherwise = Final s''
-                                where
-                                  Final s' = ns_stm (Inter ss1 s)
-                                  Final s'' = ns_stm (Inter ss2 s)
-ns_stm (Inter (While b ss) s) | evalB b s = Final s''
-                              | otherwise = Final s
-                              where
-                                Final s' = ns_stm (Inter ss s)
-                                Final s'' = ns_stm (Inter (While b ss) s')
-
-
-s_ns :: Stm -> State -> State
-s_ns ss s = s' where
-  Final s' = ns_stm (Inter ss s)
--}
-
 decvupdate :: State
 decvupdate = undefined
 
 
 s_dynamic :: Stm -> State -> State
-s_dynamic ss s = s' where
-  Final s' = ds_stm (const undefined) (Inter ss s)
+s_dynamic stm s = s' where
+  Final s' = ds_stm (const undefined) (Inter stm s)
 
-ds_stm :: S_envp -> Config  -> Config
+ds_stm :: D_envp -> Config  -> Config
 ds_stm envp (Inter (Ass x a) s) = Final (update s (evalA s a) x)
 ds_stm envp (Inter Skip s) = Final s
 ds_stm envp (Inter (Comp stm1 stm2) s)= Final s''
     where
       Final s'  = ds_stm envp (Inter stm1 s)
       Final s'' = ds_stm envp (Inter stm2 s')
-ds_stm envp (Inter (If bexp stm1 stm2) s)
-  | evalB s bexp = Final s'
-  where
-    Final s' = ds_stm envp (Inter stm1 s)
-ds_stm envp (Inter (If bexp stm1 stm2) s)
-  | not(evalB s bexp) = Final s'
-  where
-    Final s' = ds_stm envp (Inter stm2 s)
-ds_stm envp (Inter (While bexp stm) s)
-  | evalB s bexp = Final s''
-  where
-    Final s'  = ds_stm envp (Inter stm s)
-    Final s'' = ds_stm envp (Inter (While bexp stm) s')
-ds_stm envp (Inter (While bexp stm) s)
-  | not(evalB s bexp ) = Final s
-ds_stm envp (Inter (Block decv decp stm) s) = ds_stm (fold_procedures envp decp) (Inter stm s)
-ds_stm envp (Inter (Call pname) s) = ds_stm envp (Final s)
+ds_stm envp (Inter (If b stm1 stm2) s)
+  | evalB s b = Final s'
+  | otherwise = Final s'' where
+    Final s'  = ds_stm envp (Inter stm1 s)
+    Final s'' = ds_stm envp (Inter stm2 s)
+ds_stm envp (Inter (While b ss) s)
+  | evalB s b = Final s''
+  | otherwise = Final s where
+    Final s' = ds_stm envp (Inter ss s)
+    Final s'' = ds_stm envp (Inter (While b ss) s')
+ds_stm envp (Inter (Block decv decp stm) s) = Final s'' where
+  Final s'  = Final (foldr upd_d s decv)
+  Final s'' = ds_stm (fold_procedures envp decp) (Inter stm s')
+ds_stm envp (Inter (Call pname) s) =  ds_stm envp (Inter (envp pname) s)
 
-fold_procedures :: S_envp -> DecP -> S_envp
+fold_procedures :: D_envp -> DecP -> D_envp
 fold_procedures envp decp = envp where
   envp = foldr upd_p envp decp
 
-upd_p :: (Pname, Stm) -> S_envp -> S_envp
+upd_p :: (Pname, Stm) -> D_envp -> D_envp
 upd_p (pname, stmt) envp y
   | pname == y = stmt
   | otherwise  = envp y
 
+upd_d :: (Var, Aexp) -> State -> State
+upd_d (var, aexp) s = (update s (evalA s aexp) var)
+
 init_s :: State
 init_s a = 0
+
+blocktest :: Stm
+blocktest = Block [("x",N 1),("y",N 2)] [("p",Ass "x" (Add (V "x") (N 1)))] (Comp (Call "p") (Ass "x" (Add (V "x") (N 1))))
+
+scopetest :: Stm
+scopetest = Block [("x",N 0)] [("p",Ass "x" (Mult (V "x") (N 2))),("q",Call "p")] (Block [("x",N 5)] [("p",Ass "x" (Add (V "x") (N 1)))] (Comp (Call "q") (Ass "y" (V "x"))))
+
+test_state :: State
+test_state _ = 0
+
+test_state_x_7 :: State
+test_state_x_7 "x" = 7
+test_state_x_7 _ = 0
+
+test_state_x_14 :: State
+test_state_x_14 "x" = 14
+test_state_x_14 _ = 0
+
+-- static: y=5; dynamic: y=6; mixed: y=10
+scope_stm = parse " begin var x:= 0; var y:=0; proc p is x:=x*2; proc q is call p; begin var x := 5; proc p is x := x+1; call q; y := x end end"
+
+-- x=11
+recursive_stm = parse " begin var x:=1;    proc fac1 is begin     if x<=10 then       x:=x+1;       call fac1     else       skip   end;  call fac1 end"
+
+
+-- Even varible should be 1 if x is even else 0
+-- Note load x via a state
+mutal_recursion_stm = parse "\
+\begin var even:=0; \
+  \proc even is begin \
+    \if x=0 then \
+        \even:=1 \
+    \else \
+        \x:=x-1; \
+        \call odd \
+  \end; \
+  \proc odd is begin \
+    \if x=0 then \
+        \even:=0 \
+    \else \
+        \x:=x-1; \
+        \call even \
+    \end; \
+    \call even \
+\end"
+
+test_dynamic_scope = (s_dynamic scope_stm test_state) "y" == 6
+test_dynamic_recusion = (s_dynamic recursive_stm test_state) "x" == 11
+test_dynamic_mutal_recusion = ((s_dynamic mutal_recursion_stm test_state_x_7) "even" == 0) && ((s_dynamic mutal_recursion_stm test_state_x_14) "even" == 1)
