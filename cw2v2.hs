@@ -209,7 +209,7 @@ type Z = Num
 type T = Bool
 type State = Var -> Z
 type D_envp = Pname -> Stm
---type M_envp = Pname -> Stm -> M_envp
+newtype M_envp = M_envp ( Pname -> (Stm,M_envp))
 --type S_envp = Pname -> Stm -> Envv -> Envp
 --type Envv = Var -> Lock
 --type Loc = Z
@@ -265,9 +265,7 @@ subst_aexp (Add a1 a2) v a = (Add (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Mult a1 a2) v a = (Mult (subst_aexp a1 v a) (subst_aexp a2 v a))
 subst_aexp (Sub a1 a2) v a = (Sub (subst_aexp a1 v a) (subst_aexp a2 v a))
 
-decvupdate :: State
-decvupdate = undefined
-
+-- Dynamic Scoping
 
 s_dynamic :: Stm -> State -> State
 s_dynamic stm s = s' where
@@ -290,22 +288,73 @@ ds_stm envp (Inter (While b ss) s)
   | otherwise = Final s where
     Final s' = ds_stm envp (Inter ss s)
     Final s'' = ds_stm envp (Inter (While b ss) s')
-ds_stm envp (Inter (Block decv decp stm) s) = Final s'' where
-  Final s'  = Final (foldr upd_d s decv)
-  Final s'' = ds_stm (fold_procedures envp decp) (Inter stm s')
+ds_stm envp (Inter (Block decv decp stm) s) = Final s''' where
+  s' = updateDecV s decv
+  envp' = updateDecP envp decp
+  Final s'' = ds_stm envp' (Inter stm s')
+  s''' = (\var -> if (var `elem` (map fst decv)) then s var else s'' var)
 ds_stm envp (Inter (Call pname) s) =  ds_stm envp (Inter (envp pname) s)
 
-fold_procedures :: D_envp -> DecP -> D_envp
-fold_procedures envp decp = envp where
-  envp = foldr upd_p envp decp
+updateDecV :: State-> DecV -> State
+updateDecV s decV = foldl updateDecV' s decV
+  where
+    updateDecV':: State -> (Var, Aexp) -> State
+    updateDecV' s (var, aexp) = \var' -> case () of
+            _ | var' == var -> evalA s aexp
+              | otherwise   -> s var'
 
-upd_p :: (Pname, Stm) -> D_envp -> D_envp
-upd_p (pname, stmt) envp y
-  | pname == y = stmt
-  | otherwise  = envp y
+updateDecP :: D_envp -> DecP -> D_envp
+updateDecP envp decP = foldl updateDecP' envp decP
+  where
+    updateDecP':: D_envp -> (Pname, Stm) -> D_envp
+    updateDecP' envp (pname, stmt) = \pname' -> case () of
+            _ | pname' == pname -> stmt
+              | otherwise   -> envp pname'
 
-upd_d :: (Var, Aexp) -> State -> State
-upd_d (var, aexp) s = (update s (evalA s aexp) var)
+
+-- Mixed Scoping
+
+test :: Pname -> (Stm, M_envp) -> M_envp
+test _ = id
+
+
+s_Mixed :: Stm -> State -> State
+s_Mixed stm s = s' where
+  Final s' = ms_stm (const undefined) (Inter stm s)
+
+ms_stm :: M_envp -> Config  -> Config
+ms_stm envp (Inter (Ass x a) s) = Final (update s (evalA s a) x)
+ms_stm envp (Inter Skip s) = Final s
+ms_stm envp (Inter (Comp stm1 stm2) s)= Final s''
+    where
+      Final s'  = ms_stm envp (Inter stm1 s)
+      Final s'' = ms_stm envp (Inter stm2 s')
+ms_stm envp (Inter (If b stm1 stm2) s)
+  | evalB s b = Final s'
+  | otherwise = Final s'' where
+    Final s'  = ms_stm envp (Inter stm1 s)
+    Final s'' = ms_stm envp (Inter stm2 s)
+ms_stm envp (Inter (While b ss) s)
+  | evalB s b = Final s''
+  | otherwise = Final s where
+    Final s' = ms_stm envp (Inter ss s)
+    Final s'' = ms_stm envp (Inter (While b ss) s')
+ms_stm envp (Inter (Block decv decp stm) s) = Final s''' where
+  s' = updateDecV s decv
+  envp' = updateDecPMixed envp decp
+  Final s'' = ms_stm envp' (Inter stm s')
+  s''' = (\var -> if (var `elem` (map fst decv)) then s var else s'' var)
+ms_stm envp (Inter (Call pname) s) = Final s' where
+  envp  =  updateDecPMixed' envp (pname, Call pname)
+  Final s' =  ms_stm envp (Inter (Call pname) s) ----------------- might loop
+
+updateDecPMixed ::  M_envp -> DecP -> M_envp
+updateDecPMixed envp decP = foldl updateDecPMixed' envp decP
+
+updateDecPMixed':: M_envp -> (Pname, Stm) -> M_envp
+updateDecPMixed' envp (pname, stmt) = \pname' -> case ()  of
+              _ | pname' == pname  -> (stmt, envp)
+                | otherwise        -> envp pname'
 
 init_s :: State
 init_s a = 0
