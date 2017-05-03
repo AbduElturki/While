@@ -314,13 +314,9 @@ updateDecP envp decP = foldl updateDecP' envp decP
 
 -- Mixed Scoping
 
-test :: Pname -> (Stm, M_envp) -> M_envp
-test _ = id
-
-
 s_Mixed :: Stm -> State -> State
 s_Mixed stm s = s' where
-  Final s' = ms_stm (const undefined) (Inter stm s)
+  Final s' = ms_stm (M_envp (const undefined)) (Inter stm s)
 
 ms_stm :: M_envp -> Config  -> Config
 ms_stm envp (Inter (Ass x a) s) = Final (update s (evalA s a) x)
@@ -346,15 +342,17 @@ ms_stm envp (Inter (Block decv decp stm) s) = Final s''' where
   s''' = (\var -> if (var `elem` (map fst decv)) then s var else s'' var)
 ms_stm envp (Inter (Call pname) s) = Final s' where
   envp  =  updateDecPMixed' envp (pname, Call pname)
-  Final s' =  ms_stm envp (Inter (Call pname) s) ----------------- might loop
+  Final s' =  ms_stm envp (Inter (envp pname) s) ----------------- might loop
 
 updateDecPMixed ::  M_envp -> DecP -> M_envp
 updateDecPMixed envp decP = foldl updateDecPMixed' envp decP
 
 updateDecPMixed':: M_envp -> (Pname, Stm) -> M_envp
-updateDecPMixed' envp (pname, stmt) = \pname' -> case ()  of
-              _ | pname' == pname  -> (stmt, envp)
-                | otherwise        -> envp pname'
+updateDecPMixed' (M_envp envp) (pname, stmt) = M_envp (\pname' ->
+  case pname' == pname of
+    True  -> (stmt, M_envp envp)
+    otherwise -> envp pname')
+
 
 init_s :: State
 init_s a = 0
